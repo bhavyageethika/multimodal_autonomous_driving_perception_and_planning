@@ -1,15 +1,16 @@
 """
 Standalone Demo Script
 
-Runs the perception and planning pipeline without Streamlit.
+Runs the perception and planning pipeline on video input.
 Useful for quick testing and video generation.
 
-Run with: python demo.py
+Run with: python demo.py --video path/to/video.mp4
 """
 
 import numpy as np
 import cv2
 import time
+import sys
 from pathlib import Path
 
 # Import project modules
@@ -18,15 +19,16 @@ from src.tracking import MultiObjectTracker
 from src.state_estimation import VehicleStateEstimator
 from src.planning import MotionPlanner
 from src.visualization import BEVRenderer, OverlayRenderer
-from data.generators import SyntheticDataGenerator
+from data.loaders import VideoDataLoader
 
 
-def run_demo(num_frames: int = 300, save_video: bool = False, display: bool = True):
+def run_demo(video_path: str, num_frames: int = None, save_video: bool = False, display: bool = True):
     """
     Run the complete perception and planning pipeline demo.
     
     Args:
-        num_frames: Number of frames to process
+        video_path: Path to input video file (required)
+        num_frames: Number of frames to process (None = all frames)
         save_video: Whether to save output video
         display: Whether to display in window
     """
@@ -36,7 +38,7 @@ def run_demo(num_frames: int = 300, save_video: bool = False, display: bool = Tr
     
     # Initialize components
     print("\n[1/6] Initializing perception modules...")
-    detector = ObjectDetector(mode="simulated")
+    detector = ObjectDetector(mode="yolo", model_path="yolov8n.pt")
     lane_detector = LaneDetector()
     
     print("[2/6] Initializing tracking module...")
@@ -52,8 +54,26 @@ def run_demo(num_frames: int = 300, save_video: bool = False, display: bool = Tr
     bev_renderer = BEVRenderer()
     overlay_renderer = OverlayRenderer()
     
-    print("[6/6] Generating synthetic data...")
-    data_gen = SyntheticDataGenerator()
+    # Load video
+    print(f"[6/6] Loading video: {video_path}")
+    try:
+        data_gen = VideoDataLoader(video_path, target_size=(640, 480))
+    except FileNotFoundError:
+        print(f"\n❌ Error: Video file not found: {video_path}")
+        sys.exit(1)
+    except ValueError as e:
+        print(f"\n❌ Error: Could not open video: {e}")
+        sys.exit(1)
+    
+    print(f"      Video info: {data_gen.total_frames} frames, {data_gen.fps:.1f} FPS, "
+          f"{data_gen._width}x{data_gen._height}")
+    
+    # Set number of frames to process
+    if num_frames is None:
+        num_frames = data_gen.total_frames
+    else:
+        num_frames = min(num_frames, data_gen.total_frames)
+    
     ego_motion = data_gen.generate_ego_motion(num_frames)
     
     print("\n" + "=" * 60)
@@ -77,9 +97,11 @@ def run_demo(num_frames: int = 300, save_video: bool = False, display: bool = Tr
     for frame_idx in range(num_frames):
         frame_start = time.time()
         
-        # Generate synthetic frame
-        data_gen.frame_count = frame_idx
-        frame = data_gen.generate_frame_with_vehicles()
+        # Get frame from video
+        frame = data_gen.read_frame_at(frame_idx)
+        if frame is None:
+            print(f"\nEnd of video reached at frame {frame_idx}")
+            break
         
         # Run perception
         detections = detector.detect(frame)
@@ -159,10 +181,11 @@ def run_demo(num_frames: int = 300, save_video: bool = False, display: bool = Tr
         video_writer.release()
     if display:
         cv2.destroyAllWindows()
+    data_gen.release()
     
     # Summary
     total_time = time.time() - start_time
-    avg_fps = len(frame_times) / total_time
+    avg_fps = len(frame_times) / total_time if total_time > 0 else 0
     
     print("\n" + "=" * 60)
     print("Demo Complete!")
@@ -175,80 +198,6 @@ def run_demo(num_frames: int = 300, save_video: bool = False, display: bool = Tr
         print(f"\nVideo saved to: output_demo.mp4")
 
 
-def run_component_tests():
-    """Test individual components."""
-    print("\n" + "=" * 60)
-    print("Running Component Tests")
-    print("=" * 60)
-    
-    # Test detector
-    print("\n[Test 1] Object Detector")
-    detector = ObjectDetector(mode="simulated")
-    test_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-    detections = detector.detect(test_frame)
-    print(f"  ✓ Generated {len(detections)} detections")
-    for det in detections[:3]:
-        print(f"    - {det.class_name}: confidence={det.confidence:.2f}")
-    
-    # Test lane detector
-    print("\n[Test 2] Lane Detector")
-    lane_detector = LaneDetector()
-    data_gen = SyntheticDataGenerator()
-    road_frame = data_gen.generate_road_frame()
-    left_lane, right_lane = lane_detector.detect(road_frame)
-    print(f"  ✓ Left lane detected: {left_lane is not None}")
-    print(f"  ✓ Right lane detected: {right_lane is not None}")
-    
-    # Test tracker
-    print("\n[Test 3] Multi-Object Tracker")
-    tracker = MultiObjectTracker()
-    for i in range(10):
-        detector.frame_count = i
-        detections = detector.detect(test_frame)
-        tracks = tracker.update(detections)
-    print(f"  ✓ Active tracks after 10 frames: {len(tracks)}")
-    for track in tracks[:3]:
-        print(f"    - Track {track.track_id}: {track.class_name}, "
-              f"age={track.age}, trajectory_len={len(track.trajectory)}")
-    
-    # Test state estimator
-    print("\n[Test 4] Vehicle State Estimator")
-    estimator = VehicleStateEstimator()
-    for i in range(50):
-        measurement = np.array([i * 0.3, i * 0.01, 10.0, 0.1])
-        state = estimator.step(measurement)
-    print(f"  ✓ Estimated state after 50 steps:")
-    print(f"    - Position: ({state.x:.2f}, {state.y:.2f})")
-    print(f"    - Speed: {state.speed:.2f} m/s")
-    print(f"    - Heading: {np.degrees(state.heading):.2f} deg")
-    
-    # Test motion planner
-    print("\n[Test 5] Motion Planner")
-    planner = MotionPlanner()
-    current_state = (0, 0, 0, 10)
-    optimal, candidates = planner.plan(current_state)
-    print(f"  ✓ Generated {len(candidates)} candidate trajectories")
-    print(f"  ✓ Optimal trajectory:")
-    print(f"    - Type: {optimal.trajectory_type}")
-    print(f"    - Length: {optimal.length:.2f} m")
-    print(f"    - Cost: {optimal.cost:.2f}")
-    
-    # Test BEV renderer
-    print("\n[Test 6] BEV Renderer")
-    bev_renderer = BEVRenderer()
-    bev_image = bev_renderer.render(
-        ego_state=state,
-        tracks=tracks,
-        planned_trajectory=optimal,
-        show_grid=True
-    )
-    print(f"  ✓ Rendered BEV image: {bev_image.shape}")
-    
-    print("\n" + "=" * 60)
-    print("All component tests passed! ✓")
-    print("=" * 60)
-
-
 if __name__ == "__main__":
     import argparse
     
@@ -256,8 +205,12 @@ if __name__ == "__main__":
         description="Multimodal AV Perception & Planning Demo"
     )
     parser.add_argument(
-        "--frames", type=int, default=300,
-        help="Number of frames to process"
+        "--video", type=str, required=True,
+        help="Path to input video file (required)"
+    )
+    parser.add_argument(
+        "--frames", type=int, default=None,
+        help="Number of frames to process (default: all frames)"
     )
     parser.add_argument(
         "--save-video", action="store_true",
@@ -267,19 +220,12 @@ if __name__ == "__main__":
         "--no-display", action="store_true",
         help="Don't display output window"
     )
-    parser.add_argument(
-        "--test", action="store_true",
-        help="Run component tests only"
-    )
     
     args = parser.parse_args()
     
-    if args.test:
-        run_component_tests()
-    else:
-        run_demo(
-            num_frames=args.frames,
-            save_video=args.save_video,
-            display=not args.no_display
-        )
-
+    run_demo(
+        video_path=args.video,
+        num_frames=args.frames,
+        save_video=args.save_video,
+        display=not args.no_display
+    )

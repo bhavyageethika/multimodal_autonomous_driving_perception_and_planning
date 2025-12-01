@@ -5,4 +5,5 @@ streamlit>=1.20.0
 filterpy>=1.4.5
 scipy>=1.7.0
 Pillow>=9.0.0
+ultralytics>=8.0.0
 

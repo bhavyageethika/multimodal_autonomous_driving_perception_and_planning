@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+env/
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# YOLO models (auto-downloaded)
+*.pt
+
+# Input videos (user data)
+input_data/*.mp4
+input_data/*.avi
+input_data/*.mov
+input_data/*.mkv
+
+# Output files
+output_demo.mp4
+
+# OS files
+.DS_Store
+Thumbs.db
+

@@ -22,7 +22,9 @@ from src.tracking import MultiObjectTracker
 from src.state_estimation import VehicleStateEstimator
 from src.planning import MotionPlanner
 from src.visualization import BEVRenderer, OverlayRenderer
-from data.generators import SyntheticDataGenerator
+from data.loaders import VideoDataLoader
+import tempfile
+import os
 
 
 def init_session_state():
@@ -31,17 +33,49 @@ def init_session_state():
         st.session_state.initialized = True
         st.session_state.frame_idx = 0
         st.session_state.playing = False
-        st.session_state.detector = ObjectDetector(mode="simulated")
+        st.session_state.detector = ObjectDetector(mode="yolo", model_path="yolov8n.pt")
         st.session_state.lane_detector = LaneDetector()
         st.session_state.tracker = MultiObjectTracker()
         st.session_state.state_estimator = VehicleStateEstimator()
         st.session_state.motion_planner = MotionPlanner()
         st.session_state.bev_renderer = BEVRenderer()
         st.session_state.overlay_renderer = OverlayRenderer()
-        st.session_state.data_generator = SyntheticDataGenerator()
+        st.session_state.video_loader = None
+        st.session_state.video_loaded = False
+        st.session_state.max_frames = 0
+        st.session_state.temp_video_path = None
+        st.session_state.ego_motion = []
+
+
+def load_video_file(uploaded_file):
+    """Load an uploaded video file."""
+    # Save uploaded file to temp location
+    if st.session_state.temp_video_path and os.path.exists(st.session_state.temp_video_path):
+        os.remove(st.session_state.temp_video_path)
+    
+    # Create temp file with proper extension
+    suffix = os.path.splitext(uploaded_file.name)[1]
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+        tmp_file.write(uploaded_file.getbuffer())
+        st.session_state.temp_video_path = tmp_file.name
+    
+    # Load video
+    try:
+        video_loader = VideoDataLoader(st.session_state.temp_video_path, target_size=(640, 480))
+        st.session_state.video_loader = video_loader
+        st.session_state.video_loaded = True
+        st.session_state.max_frames = video_loader.total_frames
+        st.session_state.ego_motion = video_loader.generate_ego_motion(video_loader.total_frames)
+        st.session_state.frame_idx = 0
         
-        # Pre-generate data
-        st.session_state.ego_motion = st.session_state.data_generator.generate_ego_motion(500)
+        # Reset components
+        st.session_state.tracker.reset()
+        st.session_state.state_estimator.reset()
+        st.session_state.lane_detector.reset()
+        
+        return True, video_loader.get_info()
+    except Exception as e:
+        return False, str(e)
 
 
 def process_frame(frame_idx: int):
@@ -54,11 +88,11 @@ def process_frame(frame_idx: int):
     motion_planner = st.session_state.motion_planner
     bev_renderer = st.session_state.bev_renderer
     overlay_renderer = st.session_state.overlay_renderer
-    data_gen = st.session_state.data_generator
     
-    # Generate synthetic frame
-    data_gen.frame_count = frame_idx
-    frame = data_gen.generate_frame_with_vehicles()
+    # Get frame from video
+    frame = st.session_state.video_loader.read_frame_at(frame_idx)
+    if frame is None:
+        return None, None, None, None, None, None
     
     # Run perception
     detections = detector.detect(frame)
@@ -104,7 +138,7 @@ def process_frame(frame_idx: int):
         show_grid=True
     )
     
-    return camera_view, bev_view, vehicle_state, tracks, optimal_traj
+    return camera_view, bev_view, vehicle_state, tracks, optimal_traj, detections
 
 
 def create_state_plots(state_history):
@@ -186,6 +220,23 @@ def main():
     .stApp { background-color: #1a1a2e; }
     h1, h2, h3 { color: #00d4ff; }
     .stMarkdown { color: #ffffff; }
+    .upload-prompt {
+        text-align: center;
+        padding: 100px 50px;
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        border-radius: 20px;
+        border: 2px dashed #00d4ff;
+        margin: 50px auto;
+        max-width: 600px;
+    }
+    .upload-prompt h2 {
+        color: #00d4ff;
+        margin-bottom: 20px;
+    }
+    .upload-prompt p {
+        color: #888;
+        font-size: 1.1em;
+    }
     </style>
     """, unsafe_allow_html=True)
     
@@ -195,11 +246,56 @@ def main():
     # Initialize
     init_session_state()
     
-    # Sidebar controls
+    # Sidebar - Video Upload
+    st.sidebar.header("📁 Video Input")
+    
+    uploaded_video = st.sidebar.file_uploader(
+        "Upload Driving Video", 
+        type=['mp4', 'avi', 'mov', 'mkv'],
+        help="Upload a driving video to analyze"
+    )
+    
+    if uploaded_video is not None:
+        # Check if this is a new upload
+        if ('last_uploaded' not in st.session_state or 
+            st.session_state.last_uploaded != uploaded_video.name):
+            st.session_state.last_uploaded = uploaded_video.name
+            with st.sidebar.status("Loading video...", expanded=True) as status:
+                success, info = load_video_file(uploaded_video)
+                if success:
+                    status.update(label="Video loaded!", state="complete")
+                    st.sidebar.success(f"✅ {uploaded_video.name}")
+                    st.sidebar.info(f"📊 {info['total_frames']} frames | {info['fps']:.1f} FPS | {info['width']}x{info['height']}")
+                else:
+                    status.update(label="Error loading video", state="error")
+                    st.sidebar.error(f"❌ {info}")
+    
+    # Check if video is loaded
+    if not st.session_state.video_loaded:
+        # Show upload prompt
+        st.markdown("""
+        <div class="upload-prompt">
+            <h2>📹 Upload a Video to Get Started</h2>
+            <p>Use the sidebar to upload a driving video (MP4, AVI, MOV, or MKV format).</p>
+            <p>The system will analyze the video using:</p>
+            <ul style="text-align: left; color: #aaa; margin-top: 20px;">
+                <li>Object Detection (vehicles, pedestrians, cyclists)</li>
+                <li>Lane Detection</li>
+                <li>Multi-Object Tracking</li>
+                <li>State Estimation</li>
+                <li>Motion Planning</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
+        return
+    
+    # Video is loaded - show controls and processing
+    st.sidebar.markdown("---")
     st.sidebar.header("⚙️ Controls")
     
+    max_frame = st.session_state.max_frames - 1 if st.session_state.max_frames > 0 else 0
     frame_idx = st.sidebar.slider(
-        "Frame", 0, 299, st.session_state.frame_idx, key="frame_slider"
+        "Frame", 0, max_frame, min(st.session_state.frame_idx, max_frame), key="frame_slider"
     )
     st.session_state.frame_idx = frame_idx
     
@@ -223,7 +319,12 @@ def main():
     show_planning = st.sidebar.checkbox("Show Planning", value=True)
     
     # Process current frame
-    camera_view, bev_view, vehicle_state, tracks, planned_traj = process_frame(frame_idx)
+    result = process_frame(frame_idx)
+    if result[0] is None:
+        st.error("Failed to read frame from video")
+        return
+    
+    camera_view, bev_view, vehicle_state, tracks, planned_traj, detections = result
     
     # Main display
     col1, col2 = st.columns(2)
@@ -237,7 +338,7 @@ def main():
         # Perception metrics
         st.markdown("**Perception Metrics:**")
         metric_cols = st.columns(3)
-        metric_cols[0].metric("Detections", len(st.session_state.detector._detect_simulated(camera_view)))
+        metric_cols[0].metric("Detections", len(detections))
         metric_cols[1].metric("Active Tracks", len(tracks))
         metric_cols[2].metric("Track IDs", ", ".join([str(t.track_id) for t in tracks[:5]]) or "None")
     
@@ -277,7 +378,7 @@ def main():
         state_cols[5].metric("Yaw Rate", f"{np.degrees(vehicle_state.yaw_rate):.2f}°/s")
     
     # Auto-advance
-    if auto_play and frame_idx < 299:
+    if auto_play and frame_idx < max_frame:
         time.sleep(0.05)
         st.session_state.frame_idx = frame_idx + 1
         st.rerun()
@@ -288,7 +389,7 @@ def main():
         st.markdown("""
         ### Multimodal Perception & Planning Pipeline
         
-        This demonstration showcases key components of an autonomous driving system:
+        This system analyzes driving videos using key components of an autonomous driving system:
         
         **1. Visual Perception**
         - Object detection (vehicles, pedestrians, cyclists)
@@ -319,4 +420,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
