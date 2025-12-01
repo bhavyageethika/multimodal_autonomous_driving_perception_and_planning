@@ -1,6 +1,6 @@
 # 🚗 Multimodal Autonomous Driving Perception & Planning System
 
-A comprehensive demonstration of autonomous driving perception and planning capabilities, showcasing experience with **multimodal data** including visual data, structured perception outputs, and motion planning.
+A comprehensive demonstration of autonomous driving perception and planning capabilities, showcasing **multimodal data** including visual data, structured perception outputs, and motion planning.
 
 ![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)
 ![OpenCV](https://img.shields.io/badge/OpenCV-4.5+-green.svg)
@@ -10,9 +10,7 @@ A comprehensive demonstration of autonomous driving perception and planning capa
 
 ## 🎯 Overview
 
-This project demonstrates proficiency in:
-
-| Skill Area | Implementation |
+| type | Implementation |
 |------------|----------------|
 | **Visual Data (Images/Video)** | Object detection, lane detection, frame processing |
 | **Structured Perception Outputs** | Agent tracks with IDs, bounding boxes, trajectories |
@@ -273,14 +271,4 @@ Where `τ = t/T` is normalized time, ensuring:
 5. **Data Visualization**: Real-time dashboards, multi-view rendering
 
 ---
-
-## 📝 License
-
-MIT License - feel free to use for portfolio/demonstration purposes.
-
----
-
-## 🤝 Contact
-
-*Demonstrating experience in multimodal autonomous systems*
 
