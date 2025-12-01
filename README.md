@@ -1,11 +1,6 @@
 # 🚗 Multimodal Autonomous Driving Perception & Planning System
 
 A comprehensive demonstration of autonomous driving perception and planning capabilities, showcasing **multimodal data** including visual data, structured perception outputs, and motion planning.
-
-![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)
-![OpenCV](https://img.shields.io/badge/OpenCV-4.5+-green.svg)
-![Streamlit](https://img.shields.io/badge/Streamlit-1.20+-red.svg)
-
 ---
 
 ## 🎯 Overview
@@ -261,8 +256,6 @@ Where `τ = t/T` is normalized time, ensuring:
 - Smooth, jerk-limited motion
 
 ---
-
-## 🎓 Skills Demonstrated
 
 1. **Computer Vision**: Object detection, lane detection, image processing
 2. **Sensor Fusion**: Kalman filtering, measurement integration
