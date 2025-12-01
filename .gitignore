@@ -31,6 +31,9 @@ input_data/*.mkv
 # Output files
 output_demo.mp4
 
+# Database files
+*.db
+
 # OS files
 .DS_Store
 Thumbs.db
