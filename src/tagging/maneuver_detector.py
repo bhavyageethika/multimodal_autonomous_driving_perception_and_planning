@@ -304,3 +304,4 @@ class ManeuverDetector:
         self.position_history.clear()
         self.frame_count = 0
 
+

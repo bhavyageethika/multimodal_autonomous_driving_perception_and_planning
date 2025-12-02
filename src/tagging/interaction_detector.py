@@ -409,3 +409,4 @@ class InteractionDetector:
         self.track_history.clear()
         self.frame_count = 0
 
+

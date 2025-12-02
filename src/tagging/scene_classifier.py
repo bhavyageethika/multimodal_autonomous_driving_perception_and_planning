@@ -302,3 +302,4 @@ class SceneClassifier:
         self.frame_count = 0
         self.history = []
 
+

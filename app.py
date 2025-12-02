@@ -28,7 +28,7 @@ from src.tracking import MultiObjectTracker
 from src.state_estimation import VehicleStateEstimator
 from src.planning import MotionPlanner
 from src.visualization import BEVRenderer, OverlayRenderer
-from src.tagging import AutoTagger
+from src.tagging import AutoTagger, VLMTagger
 from src.database import TagDatabase
 from data.loaders import VideoDataLoader
 import tempfile
@@ -49,6 +49,8 @@ def init_session_state():
         st.session_state.bev_renderer = BEVRenderer()
         st.session_state.overlay_renderer = OverlayRenderer()
         st.session_state.auto_tagger = None
+        st.session_state.vlm_tagger = VLMTagger(use_fast_mode=True)  # Initialize VLM early
+        st.session_state.use_vlm = True  # Use VLM by default
         st.session_state.tag_database = TagDatabase("driving_tags.db")
         st.session_state.video_loader = None
         st.session_state.video_loaded = False
@@ -56,6 +58,7 @@ def init_session_state():
         st.session_state.temp_video_path = None
         st.session_state.ego_motion = []
         st.session_state.current_tags = None
+        st.session_state.current_vlm_tags = None
 
 
 def load_video_file(uploaded_file):
@@ -79,11 +82,15 @@ def load_video_file(uploaded_file):
         st.session_state.ego_motion = video_loader.generate_ego_motion(video_loader.total_frames)
         st.session_state.frame_idx = 0
         
-        # Initialize auto-tagger
+        # Initialize taggers
         st.session_state.auto_tagger = AutoTagger(
             video_path=uploaded_file.name,
             fps=video_loader.fps
         )
+        
+        # Reset VLM tagger for new video (keep model loaded)
+        if st.session_state.vlm_tagger:
+            st.session_state.vlm_tagger.reset()
         
         # Reset components
         st.session_state.tracker.reset()
@@ -134,7 +141,19 @@ def process_frame(frame_idx: int):
     
     # Run auto-tagging
     frame_tags = None
+    vlm_tags = None
+    
+    if st.session_state.use_vlm and st.session_state.vlm_tagger:
+        # Use VLM-based tagging (dynamic, no hardcoded tags)
+        vlm_tags = st.session_state.vlm_tagger.tag_frame(
+            frame=frame,
+            vehicle_state=vehicle_state,
+            tracks=tracks
+        )
+        st.session_state.current_vlm_tags = vlm_tags
+    
     if auto_tagger:
+        # Also run rule-based tagger for comparison
         frame_tags = auto_tagger.tag_frame(
             frame=frame,
             detections=detections,
@@ -169,7 +188,7 @@ def process_frame(frame_idx: int):
         show_grid=True
     )
     
-    return camera_view, bev_view, vehicle_state, tracks, optimal_traj, detections, frame_tags
+    return camera_view, bev_view, vehicle_state, tracks, optimal_traj, detections, frame_tags, vlm_tags
 
 
 def create_state_plots(state_history):
@@ -492,7 +511,12 @@ def main():
             st.session_state.auto_tagger.reset()
         st.rerun()
     
-    auto_play = st.sidebar.checkbox("▶️ Auto Play", value=False)
+    # Auto-play is ON by default
+    auto_play = st.sidebar.checkbox("▶️ Auto Play", value=True)
+    
+    # Playback speed control
+    playback_speed = st.sidebar.slider("⚡ Speed", 0.5, 3.0, 1.0, 0.5, 
+                                        help="Playback speed multiplier")
     
     # Database controls
     st.sidebar.markdown("---")
@@ -514,7 +538,7 @@ def main():
         st.error("Failed to read frame from video")
         return
     
-    camera_view, bev_view, vehicle_state, tracks, planned_traj, detections, frame_tags = result
+    camera_view, bev_view, vehicle_state, tracks, planned_traj, detections, frame_tags, vlm_tags = result
     
     # Create tabs for different views
     tab1, tab2, tab3 = st.tabs(["🎥 Live View", "🏷️ Auto-Tags", "📊 Metrics"])
@@ -563,9 +587,61 @@ def main():
             state_cols[5].metric("Yaw Rate", f"{np.degrees(vehicle_state.yaw_rate):.2f}°/s")
     
     with tab2:
-        st.subheader("🏷️ Current Frame Tags")
+        st.subheader("🏷️ VLM-Generated Tags (Dynamic)")
         
-        if frame_tags:
+        # Toggle between VLM and rule-based
+        st.session_state.use_vlm = st.checkbox("Use VLM (Vision-Language Model)", value=st.session_state.use_vlm)
+        
+        if st.session_state.use_vlm:
+            if vlm_tags:
+                # Display VLM-generated content
+                st.markdown("### 📝 Scene Description")
+                st.info(vlm_tags.scene_description or "Generating description...")
+                
+                st.markdown("### ⚠️ Safety Assessment")
+                risk_colors = {'low': '🟢', 'medium': '🟡', 'high': '🟠', 'critical': '🔴'}
+                risk_icon = risk_colors.get(vlm_tags.risk_level, '⚪')
+                st.warning(f"{risk_icon} **Risk Level: {vlm_tags.risk_level.upper()}**")
+                st.caption(vlm_tags.safety_assessment or "Analyzing...")
+                
+                st.markdown("### 🏷️ Extracted Tags")
+                all_tags = vlm_tags.get_tags_list()
+                if all_tags:
+                    # Display tags as colored badges
+                    tags_html = " ".join([
+                        f'<span style="background-color: #4CAF50; color: white; padding: 4px 8px; border-radius: 12px; margin: 2px; display: inline-block;">{tag}</span>'
+                        for tag in all_tags
+                    ])
+                    st.markdown(tags_html, unsafe_allow_html=True)
+                else:
+                    st.caption("Processing tags from description...")
+                
+                # Scene details
+                st.markdown("### 📋 Scene Details")
+                detail_cols = st.columns(3)
+                detail_cols[0].metric("Road Type", vlm_tags.road_type or "Unknown")
+                detail_cols[1].metric("Weather", vlm_tags.weather or "Unknown")
+                detail_cols[2].metric("Time of Day", vlm_tags.time_of_day or "Unknown")
+            else:
+                st.warning("⏳ VLM is processing... Please wait (first frame may take 5-10 seconds)")
+                st.caption("The Vision-Language Model generates descriptions for each frame.")
+            
+            st.markdown("---")
+            st.subheader("📈 VLM Tagging Progress")
+            
+            if st.session_state.vlm_tagger:
+                vlm = st.session_state.vlm_tagger
+                progress = (frame_idx + 1) / st.session_state.max_frames
+                st.progress(progress, text=f"Processed {frame_idx + 1} / {st.session_state.max_frames} frames")
+                
+                stats = vlm.get_statistics()
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Unique Tags Found", stats.get('unique_tags', 0))
+                col2.metric("Frames Analyzed", stats.get('total_frames', 0))
+                col3.metric("Risk Frames", stats.get('frames_with_risk', 0))
+        
+        elif frame_tags:
+            st.caption("📌 Using rule-based tagging (VLM disabled)")
             display_current_tags(frame_tags)
             
             st.markdown("---")
@@ -589,7 +665,66 @@ def main():
     with tab3:
         st.subheader("📊 Tag Statistics & Metrics")
         
-        if st.session_state.auto_tagger and st.session_state.auto_tagger.tag_counts:
+        # VLM-based metrics
+        if st.session_state.use_vlm and st.session_state.vlm_tagger:
+            vlm = st.session_state.vlm_tagger
+            stats = vlm.get_statistics()
+            
+            if stats.get('tag_frequency'):
+                # Create VLM tag distribution chart
+                fig, ax = plt.subplots(figsize=(10, 4))
+                tags = list(stats['tag_frequency'].keys())[:15]
+                counts = [stats['tag_frequency'][t] for t in tags]
+                
+                colors = plt.cm.viridis(np.linspace(0.3, 0.9, len(tags)))
+                bars = ax.barh(tags, counts, color=colors)
+                ax.set_xlabel('Count')
+                ax.set_title('VLM-Generated Tag Distribution')
+                ax.invert_yaxis()
+                
+                for bar, count in zip(bars, counts):
+                    ax.text(bar.get_width() + 0.3, bar.get_y() + bar.get_height()/2,
+                           str(count), va='center', fontsize=9)
+                
+                plt.tight_layout()
+                st.pyplot(fig)
+                plt.close(fig)
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("**📊 VLM Statistics:**")
+                st.markdown(f"- Total Frames: `{stats.get('total_frames', 0)}`")
+                st.markdown(f"- Unique Tags: `{stats.get('unique_tags', 0)}`")
+                st.markdown(f"- Risk Frames: `{stats.get('frames_with_risk', 0)}`")
+            
+            with col2:
+                st.markdown("**🔝 Top Tags:**")
+                for tag, count in list(stats.get('tag_frequency', {}).items())[:5]:
+                    st.markdown(f"- `{tag}`: {count} occurrences")
+            
+            # Natural language search
+            st.markdown("---")
+            st.subheader("🔍 Natural Language Search")
+            search_query = st.text_input(
+                "Search by description:", 
+                placeholder="e.g., pedestrian crossing, dangerous situation, highway"
+            )
+            
+            if search_query:
+                results = vlm.search_by_description(search_query)
+                st.markdown(f"Found **{len(results)}** frames matching `{search_query}`")
+                
+                if results:
+                    st.markdown("Matching frames:")
+                    for tags in results[:10]:
+                        with st.expander(f"Frame {tags.frame_idx} (t={tags.timestamp:.2f}s)"):
+                            st.markdown(f"**Description:** {tags.scene_description}")
+                            st.markdown(f"**Risk:** {tags.risk_level}")
+                            st.markdown(f"**Tags:** {', '.join(tags.extracted_tags)}")
+        
+        # Rule-based metrics (fallback)
+        elif st.session_state.auto_tagger and st.session_state.auto_tagger.tag_counts:
             tagger = st.session_state.auto_tagger
             
             # Tag distribution chart
@@ -641,9 +776,11 @@ def main():
             if fig:
                 st.pyplot(fig)
     
-    # Auto-advance
+    # Auto-advance with speed control
     if auto_play and frame_idx < max_frame:
-        time.sleep(0.05)
+        # Base delay is ~30fps (0.033s), adjusted by playback speed
+        delay = 0.033 / playback_speed
+        time.sleep(delay)
         st.session_state.frame_idx = frame_idx + 1
         st.rerun()
     

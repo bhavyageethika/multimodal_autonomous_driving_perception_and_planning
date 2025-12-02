@@ -8,3 +8,4 @@ from .tag_database import TagDatabase
 
 __all__ = ['TagDatabase']
 
+

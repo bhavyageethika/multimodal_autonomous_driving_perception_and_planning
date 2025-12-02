@@ -371,3 +371,4 @@ class AutoTagger:
         self.session.end_time = datetime.now()
         self.session.total_frames = self.frame_count
 
+

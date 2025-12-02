@@ -34,6 +34,9 @@ output_demo.mp4
 # Database files
 *.db
 
+# Documentation (local)
+documentation
+
 # OS files
 .DS_Store
 Thumbs.db

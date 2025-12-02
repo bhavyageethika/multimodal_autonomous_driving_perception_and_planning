@@ -258,3 +258,4 @@ class VideoDataLoader:
                 f"frames={self._total_frames}, fps={self._fps:.1f}, "
                 f"size={self._width}x{self._height})")
 
+
